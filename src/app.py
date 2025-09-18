@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
 import os
 from pathlib import Path
+from . import db
 
 app = FastAPI(title="Mergington High School API",
               description="API for viewing and signing up for extracurricular activities")
@@ -19,8 +20,8 @@ current_dir = Path(__file__).parent
 app.mount("/static", StaticFiles(directory=os.path.join(Path(__file__).parent,
           "static")), name="static")
 
-# In-memory activity database
-activities = {
+# Seed data moved to use for DB initialization
+seed_activities = {
     "Chess Club": {
         "description": "Learn strategies and compete in chess tournaments",
         "schedule": "Fridays, 3:30 PM - 5:00 PM",
@@ -83,50 +84,38 @@ def root():
     return RedirectResponse(url="/static/index.html")
 
 
+@app.on_event("startup")
+def on_startup():
+    # Initialize DB and seed activities if needed
+    db.init_db(seed_activities)
+
+
 @app.get("/activities")
 def get_activities():
-    return activities
+    return db.get_activities_from_db()
 
 
 @app.post("/activities/{activity_name}/signup")
 def signup_for_activity(activity_name: str, email: str):
     """Sign up a student for an activity"""
-    # Validate activity exists
-    if activity_name not in activities:
+    try:
+        db.add_participant(activity_name, email)
+        return {"message": f"Signed up {email} for {activity_name}"}
+    except KeyError:
         raise HTTPException(status_code=404, detail="Activity not found")
-
-    # Get the specific activity
-    activity = activities[activity_name]
-
-    # Validate student is not already signed up
-    if email in activity["participants"]:
+    except ValueError:
         raise HTTPException(
-            status_code=400,
-            detail="Student is already signed up"
-        )
-
-    # Add student
-    activity["participants"].append(email)
-    return {"message": f"Signed up {email} for {activity_name}"}
+            status_code=400, detail="Student is already signed up")
+    except RuntimeError:
+        raise HTTPException(status_code=400, detail="Activity is full")
 
 
 @app.delete("/activities/{activity_name}/unregister")
 def unregister_from_activity(activity_name: str, email: str):
     """Unregister a student from an activity"""
-    # Validate activity exists
-    if activity_name not in activities:
-        raise HTTPException(status_code=404, detail="Activity not found")
-
-    # Get the specific activity
-    activity = activities[activity_name]
-
-    # Validate student is signed up
-    if email not in activity["participants"]:
+    try:
+        db.remove_participant(activity_name, email)
+        return {"message": f"Unregistered {email} from {activity_name}"}
+    except KeyError:
         raise HTTPException(
-            status_code=400,
-            detail="Student is not signed up for this activity"
-        )
-
-    # Remove student
-    activity["participants"].remove(email)
-    return {"message": f"Unregistered {email} from {activity_name}"}
+            status_code=400, detail="Student is not signed up for this activity")
